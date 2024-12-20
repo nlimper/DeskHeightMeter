@@ -1,6 +1,7 @@
 #include "user_interface.h"
 #include <Adafruit_VL53L0X.h>
 #include <Arduino.h>
+#include <EEPROM.h>
 #include <ESP8266WiFi.h>
 #include <OneButton.h>
 #include <TM1637TinyDisplay.h>
@@ -8,19 +9,22 @@
 #define CLK D6
 #define DIO D5
 // #define BUTTON D7
-
+#define ADJUST 2 // adjustment: add thickness of the desktop
 
 /*
 features:
-- measures desk height in cm or inches
+- measures desk height in cm, inches or bananas
 
-interface:
-- button press:
-- double click:
-- triple click:
-- long press: turn off
+interface: block sensor for more than 3 seconds to change units. 
+Hold until desired unit is selected, then let go to save.
 
 */
+
+enum Unit {
+	CENTIMETERS,
+	INCHES,
+	BANANAS
+};
 
 TM1637TinyDisplay display(CLK, DIO);
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
@@ -35,7 +39,11 @@ float avg = 0, avgold = 0, longavg;
 bool displayActive = true;
 long t = 0;
 time_t ignoreUntil = 0, msgUntil = 0;
-bool unitInch = false;
+Unit units = CENTIMETERS;
+
+unsigned long unitChangeTime = 0;
+unsigned long closeProximityStart = 0;
+bool cyclingUnits = false;
 
 #ifdef BUTTON
 IRAM_ATTR void checkTicks() {
@@ -84,15 +92,7 @@ void doSleep() {
 
 void singleClick() {
 	Serial.println("singleClick() detected.");
-	unitInch = !unitInch;
-	if (unitInch) {
-		display.showString("inch");
-	} else {
-		display.showString(" c  ");
-		display.setSegments(0b01010101, 2);
-	}
-	msgUntil = millis() + 1000;
-	display.setBrightness(7);
+	cycleUnit();
 }
 
 void doubleClick() {
@@ -130,13 +130,49 @@ void pressStop() {
 #endif
 
 void displayHeight(float height) {
-	if (unitInch) {
-		display.showNumberDec(int(height / 2.54), 0b01000000, false, 3, 0);
-		display.showString("\"", 1, 3);
-	} else {
+	switch (units) {
+	case CENTIMETERS:
 		display.showNumber(int(height / 10), false, 3, 0);
 		display.showString(" ", 1, 3);
+		break;
+	case INCHES:
+		display.showNumberDec(int(height / 2.54), 0b01000000, false, 3, 0);
+		display.showString("\"", 1, 3);
+		break;
+	case BANANAS:
+		display.showNumberDec(int(height / 1.80), 0b10000000, false, 3, 0);
+		display.showString("]", 1, 3);
+		break;
 	}
+}
+
+void saveCurrentUnit() {
+	EEPROM.write(2, static_cast<uint8_t>(units));
+	EEPROM.commit();
+}
+
+void printUnit(Unit unit) {
+	switch (unit) {
+	case CENTIMETERS:
+		display.showString(" c  ");
+		display.setSegments(0b01010101, 2);
+		break;
+	case INCHES:
+		display.showString("inch");
+		break;
+	case BANANAS:
+		display.showString("bnan");
+		break;
+	}
+	msgUntil = millis() + 1000;
+	t = millis();
+	displayActive = true;
+	display.setBrightness(7);
+}
+
+void cycleUnit() {
+	units = static_cast<Unit>((units + 1) % 3);
+	printUnit(units);
 }
 
 void setup() {
@@ -159,6 +195,18 @@ void setup() {
 
 	display.clear();
 
+	// read preferences
+	EEPROM.begin(512);
+	if (EEPROM.read(0) != 0x55 || EEPROM.read(1) != 0xAA) {
+		Serial.println("Invalid EEPROM, initializing...");
+		EEPROM.write(0, 0x55);
+		EEPROM.write(1, 0xAA);
+		EEPROM.write(2, static_cast<uint8_t>(units));
+		EEPROM.commit();
+	} else {
+		units = static_cast<Unit>(EEPROM.read(2));
+	}
+
 #ifdef BUTTON
 	attachInterrupt(digitalPinToInterrupt(BUTTON), checkTicks, CHANGE);
 
@@ -169,7 +217,6 @@ void setup() {
 	button.attachLongPressStart(pressStart);
 	button.attachLongPressStop(pressStop);
 #endif
-
 }
 
 void loop() {
@@ -181,7 +228,42 @@ void loop() {
 	if (millis() > ignoreUntil) {
 		ignoreUntil = 0;
 		lox.rangingTest(&measure, false);
+
 		if (measure.RangeStatus != 4) {
+
+			// change units by holding your finger on the sensor for more than 3 seconds
+			if (measure.RangeMilliMeter < 50) {
+				if (closeProximityStart == 0) {
+					closeProximityStart = millis();
+				}
+				if (millis() - closeProximityStart > 3000) {
+					if (millis() - closeProximityStart < 3000 + 3 * 3000) {
+						cyclingUnits = true;
+						if (millis() - unitChangeTime > 3000) {
+							cycleUnit();
+							unitChangeTime = millis();
+						}
+					} else {
+						cyclingUnits = false;
+						if (millis() - unitChangeTime > 3000) {
+							units = static_cast<Unit>(EEPROM.read(2));
+							unitChangeTime = millis();
+							display.showString("____");
+							msgUntil = millis() + 1500;
+						}
+					}
+				}
+			} else if (measure.RangeMilliMeter > 100) {
+				if (cyclingUnits) {
+					saveCurrentUnit();
+					cyclingUnits = false;
+					display.showString("save");
+					msgUntil = millis() + 1000;
+					display.setBrightness(7);
+				}
+				closeProximityStart = 0;
+			}
+
 			avg = .8 * avg + .2 * measure.RangeMilliMeter;
 			longavg = .9 * longavg + .1 * measure.RangeMilliMeter;
 
@@ -193,7 +275,7 @@ void loop() {
 					display.setBrightness(1);
 					t = millis();
 					displayActive = false;
-					displayHeight(longavg);
+					displayHeight(longavg + ADJUST);
 				}
 
 				// jitter protection
@@ -207,7 +289,7 @@ void loop() {
 				}
 
 				if (displayActive) {
-					displayHeight(avg);
+					displayHeight(avg + ADJUST);
 				} else {
 					ignoreUntil = millis() + 250;
 				}
