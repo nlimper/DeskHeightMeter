@@ -6,7 +6,7 @@ The Desk Height Meter is a simple and practical tool for tracking the height of 
 
 You can order the kit, or completely build version, on Tindie: https://www.tindie.com/products/electronics-by-nic/desk-meter/
 
-When you got this as a kit, you will find the [build instructions](https://github.com/nlimper/DeskHeightMeter/wiki/Build-instructions) in the wiki.
+When you got this as a kit, you will find the [build instructions](https://github.com/nlimper/DeskHeightMeter/wiki/Build-instructions) in the wiki. Also, you will find the FAQ in the [wiki](https://github.com/nlimper/DeskHeightMeter/wiki).
 
 <img src="https://github.com/user-attachments/assets/12912c47-0173-4c36-9ced-fd692ba6c4ff" width="60%">
 
